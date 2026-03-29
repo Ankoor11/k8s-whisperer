@@ -4,8 +4,8 @@ Uses chunked log strategy to avoid LLM context overflow.
 """
 import json
 import os
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
+from agent.llm_helper import get_llm, invoke_with_retry
 from agent.state import ClusterState
 from agent.models import Anomaly
 from mcp.kubectl_client import get_pod_logs, describe_pod
@@ -70,7 +70,7 @@ async def diagnose_node(state: ClusterState) -> ClusterState:
     if len(raw_describe) > 4000:
         raw_describe = raw_describe[-4000:]
 
-    llm = ChatGroq(model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"))
+    llm = get_llm()
 
     context = f"""Anomaly type: {anomaly.type.value}
 Severity: {anomaly.severity.value}
@@ -89,8 +89,7 @@ Trigger signal: {anomaly.trigger_signal}
         HumanMessage(content=context)
     ]
 
-    response = await llm.ainvoke(messages)
-    diagnosis = response.content.strip()
+    diagnosis = await invoke_with_retry(llm, messages, label="diagnose")
 
     return {
         **state,

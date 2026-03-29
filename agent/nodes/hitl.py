@@ -13,8 +13,8 @@ from agent.models import RemediationPlan
 def hitl_node(state: ClusterState) -> ClusterState:
     """
     Posts Slack Block Kit message with Approve/Reject buttons.
+    Also registers with local web dashboard at localhost:8002/pending.
     Calls interrupt() to suspend the LangGraph graph.
-    The graph resumes when the FastAPI webhook updates state and calls graph.invoke().
     """
     plan: RemediationPlan = state["plan"]
     anomaly = state["current_anomaly"]
@@ -22,6 +22,20 @@ def hitl_node(state: ClusterState) -> ClusterState:
 
     if plan and anomaly:
         ts = _post_slack_approval(state)
+
+        # Register with local web dashboard (works without ngrok)
+        try:
+            from api.webhook import register_pending
+            register_pending(state.get("hitl_thread_id", "unknown"), {
+                "anomaly_type": anomaly.type.value,
+                "affected_resource": anomaly.affected_resource,
+                "blast_radius": plan.blast_radius.value,
+                "action": plan.action,
+                "confidence": f"{plan.confidence:.0%}",
+                "diagnosis": state.get("diagnosis", "")[:200],
+            })
+        except Exception as e:
+            print(f"[hitl] Could not register with webhook dashboard: {e}")
 
     # interrupt() suspends the graph here. Execution resumes when graph.invoke() is called
     # with the same thread_id and state.hitl_decision set to "approved" or "rejected".

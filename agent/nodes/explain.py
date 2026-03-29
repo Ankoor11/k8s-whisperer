@@ -7,8 +7,8 @@ import os
 import uuid
 import time
 from pathlib import Path
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
+from agent.llm_helper import get_llm, invoke_with_retry
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from agent.state import ClusterState
@@ -34,7 +34,7 @@ AUDIT_LOG_PATH = Path("audit_log.json")
 
 
 async def explain_node(state: ClusterState) -> ClusterState:
-    llm = ChatGroq(model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"))
+    llm = get_llm()
 
     anomaly = state.get("current_anomaly")
     plan = state.get("plan")
@@ -55,8 +55,7 @@ Execution success: {state.get("execution_success", False)}
         HumanMessage(content=context)
     ]
 
-    response = await llm.ainvoke(messages)
-    explanation = response.content.strip()
+    explanation = await invoke_with_retry(llm, messages, label="explain")
 
     # Determine decision label
     route = state.get("route", "")

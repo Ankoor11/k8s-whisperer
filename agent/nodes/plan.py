@@ -7,8 +7,8 @@ import json
 import os
 import re
 from pathlib import Path
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
+from agent.llm_helper import get_llm, invoke_with_retry
 from agent.state import ClusterState
 from agent.models import RemediationPlan, BlastRadius, Anomaly, AnomalyType
 
@@ -124,7 +124,7 @@ async def plan_node(state: ClusterState) -> ClusterState:
         )
         return {**state, "plan": plan}
 
-    llm = ChatGroq(model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"))
+    llm = get_llm()
 
     context = f"""Anomaly: {anomaly.type.value}
 Affected resource: {anomaly.affected_resource}
@@ -139,8 +139,7 @@ Diagnosis:
         HumanMessage(content=context)
     ]
 
-    response = await llm.ainvoke(messages)
-    raw = response.content.strip()
+    raw = await invoke_with_retry(llm, messages, label="plan")
 
     if raw.startswith("```"):
         raw = raw.split("```")[1]

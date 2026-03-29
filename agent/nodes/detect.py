@@ -5,8 +5,8 @@ LLM is only called when suspicious pods are found.
 """
 import json
 import os
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
+from agent.llm_helper import get_llm, invoke_with_retry
 from agent.state import ClusterState
 from agent.models import Anomaly, AnomalyType, Severity
 
@@ -126,15 +126,14 @@ async def detect_node(state: ClusterState) -> ClusterState:
     print(f"[detect] Pre-filter: {len(suspicious)}/{len(events_to_check)} pods suspicious → calling LLM...")
 
     # ── Stage 2: LLM classification (1 API call) ────────────────────
-    llm = ChatGroq(model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"))
+    llm = get_llm()
 
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=f"Suspicious pods to classify:\n{json.dumps(suspicious, indent=2)}")
     ]
 
-    response = await llm.ainvoke(messages)
-    raw = response.content.strip()
+    raw = await invoke_with_retry(llm, messages, label="detect")
     print(f"[detect] LLM response: {raw[:200]}...")
 
     # Strip markdown fences if present

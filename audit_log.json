@@ -50,5 +50,18 @@
     "result": "deployment.apps/oom-test patched (no change)\n\u2717 Pod in Unknown state after action\n\u26a0 Pod not yet Running after 95s \u2014 may still be starting",
     "explanation": "The container ran out of memory. The system tried to fix it by adjusting the memory limit. The issue wasn't resolved.",
     "duration_seconds": 0.0
+  },
+  {
+    "timestamp": "2026-03-29T13:48:48.130661",
+    "incident_id": "900f6450-ae53-42fe-8eaf-200048df8f0a",
+    "anomaly_type": "PendingPod",
+    "affected_resource": "default/pending-test",
+    "diagnosis": "Root cause: The pending-test pod is unschedulable due to a node affinity/selector mismatch, specifically requiring a node with a gpu=true label that is not available.\nEvidence: The kubectl describe output shows a \"FailedScheduling\" event with the message \"0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector\" and the pod has a \"Node-Selectors: gpu=true\" condition, indicating that the pod requires a node with a gpu=true label to be scheduled.\nImpact: The pending-test pod is currently not running and unable to serve its intended purpose, resulting in a pending state that may impact dependent applications or services.",
+    "plan_action": "recommend",
+    "plan_blast_radius": "medium",
+    "decision": "auto_executed",
+    "result": "No automated action taken. Recommendation: The diagnosis indicates that the pod is unschedulable due to a node affinity/selector mismatch, specifically requiring a node with a gpu=true label that is not available. Since this is a PendingPod anomaly, the recommended action is to inform the engineer to review the node affinity/selector configuration and either add a node with the required label or modify the pod's configuration to match the available nodes.",
+    "explanation": "A pod couldn't run due to a mismatch with available nodes. The system recommends adjusting the node or pod settings. The issue remains unresolved.",
+    "duration_seconds": 0.0
   }
 ]
