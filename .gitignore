@@ -1,0 +1,15 @@
+# Environment
+.env
+venv/
+__pycache__/
+*.pyc
+
+# Audit log (regenerated)
+audit_log.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
