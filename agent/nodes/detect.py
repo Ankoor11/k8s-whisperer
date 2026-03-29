@@ -106,11 +106,21 @@ async def detect_node(state: ClusterState) -> ClusterState:
         return {**state, "anomalies": []}
 
     # Filter out pods already being processed (cooldown)
+    # Checks both exact pod name AND deployment prefix
     active = state.get("active_incident_pods", set())
-    events_to_check = [
-        e for e in state["events"]
-        if f"{e['namespace']}/{e['pod_name']}" not in active
-    ]
+    events_to_check = []
+    for e in state["events"]:
+        pod_key = f"{e['namespace']}/{e['pod_name']}"
+        # Check exact match
+        if pod_key in active:
+            continue
+        # Check deployment prefix match (e.g. "default/oom-test" matches "default/oom-test-xxx-yyy")
+        dep_parts = e['pod_name'].rsplit("-", 2)
+        if len(dep_parts) >= 3:
+            dep_prefix = f"{e['namespace']}/{dep_parts[0]}"
+            if dep_prefix in active:
+                continue
+        events_to_check.append(e)
 
     if not events_to_check:
         print("[detect] All pods in cooldown — skipping.")

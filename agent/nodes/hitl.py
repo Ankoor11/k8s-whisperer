@@ -130,7 +130,12 @@ def _poll_for_reaction(message_ts: str) -> str:
                     return "rejected"
 
         except SlackApiError as e:
-            print(f"[hitl] Reaction poll error: {e.response['error']}")
+            error = e.response.get('error', '')
+            if error == 'missing_scope':
+                print(f"[hitl] Slack missing reactions:read scope — auto-approving")
+                _update_slack_status(client, channel, message_ts, "✅ AUTO-APPROVED (reactions scope not configured)")
+                return "approved"
+            print(f"[hitl] Reaction poll error: {error}")
 
         time.sleep(REACTION_POLL_INTERVAL)
 

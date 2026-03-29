@@ -82,8 +82,8 @@ def get_config(thread_id: str) -> dict:
 # ── Entry point ──────────────────────────────────────────────────────
 async def run():
     """
-    Starts the agent loop. Each iteration is one observe→detect→...→explain cycle.
-    Tracks processed pods with a 5-minute cooldown to prevent duplicate handling.
+    Starts the agent loop. Processes ALL anomalies each cycle by re-invoking
+    the pipeline for each one. Only sleeps between full observation cycles.
     """
     print(f"K8sWhisperer agent starting... (polling every {POLL_INTERVAL}s)")
     print(f"Incident cooldown: {COOLDOWN_SECONDS}s (pods won't be re-processed within this window)")
@@ -100,39 +100,72 @@ async def run():
             if now - v < COOLDOWN_SECONDS
         }
 
-        state = initial_state()
-        thread_id = str(uuid.uuid4())
-        state["incident_id"] = thread_id
-        state["hitl_thread_id"] = thread_id
-        # Pass processed pods as active_incident_pods for detect_node to filter
-        state["active_incident_pods"] = set(processed_pods.keys())
+        cycle_start = time.time()
+        total_processed = 0
 
-        config = get_config(thread_id)
-        try:
-            print(f"\n[cycle] Starting observation cycle {thread_id[:8]}...")
-            if processed_pods:
-                print(f"[cycle] Skipping {len(processed_pods)} recently processed pods: {list(processed_pods.keys())}")
+        # Keep running the pipeline until no more unprocessed anomalies remain
+        while True:
+            state = initial_state()
+            thread_id = str(uuid.uuid4())
+            state["incident_id"] = thread_id
+            state["hitl_thread_id"] = thread_id
+            state["active_incident_pods"] = set(processed_pods.keys())
 
-            cycle_start = time.time()
-            result = await graph.ainvoke(state, config=config)
-            duration = round(time.time() - cycle_start, 1)
+            config = get_config(thread_id)
+            try:
+                if total_processed == 0:
+                    print(f"\n[cycle] Starting observation cycle {thread_id[:8]}...")
+                    if processed_pods:
+                        print(f"[cycle] Skipping {len(processed_pods)} recently processed pods")
+                else:
+                    print(f"\n[cycle] Processing next anomaly (#{total_processed + 1})...")
 
-            anomalies = result.get("anomalies", [])
-            if anomalies:
-                print(f"[cycle] Found {len(anomalies)} anomalies — processed in {duration}s.")
-                # Mark processed pods for cooldown
-                for a in anomalies:
-                    processed_pods[a.affected_resource] = time.time()
-            else:
-                print(f"[cycle] No anomalies detected. Sleeping {POLL_INTERVAL}s...")
+                result = await graph.ainvoke(state, config=config)
 
-        except KeyboardInterrupt:
-            print("\nAgent stopped.")
-            break
-        except Exception as e:
-            print(f"[graph] Error in cycle: {e}")
+                anomalies = result.get("anomalies", [])
+                current = result.get("current_anomaly")
 
-        # Wait before next poll
+                if current:
+                    # Cooldown the exact pod AND its deployment prefix
+                    # This prevents new pods from same deployment being re-processed
+                    resource = current.affected_resource
+                    processed_pods[resource] = time.time()
+                    # Also cooldown deployment prefix (e.g. "default/oom-test")
+                    parts = resource.split("/")
+                    if len(parts) == 2:
+                        ns, pod = parts
+                        dep_parts = pod.rsplit("-", 2)
+                        if len(dep_parts) >= 3:
+                            dep_prefix = f"{ns}/{dep_parts[0]}"
+                            processed_pods[dep_prefix] = time.time()
+
+                    total_processed += 1
+                    print(f"[cycle] ✓ Processed {current.type.value} on {resource}")
+
+                    # If there were more anomalies than just the one we processed, loop again
+                    remaining = len(anomalies) - 1
+                    if remaining > 0:
+                        print(f"[cycle] {remaining} more anomalies remaining — processing next...")
+                        continue
+                    else:
+                        break
+                else:
+                    break
+
+            except KeyboardInterrupt:
+                print("\nAgent stopped.")
+                return
+            except Exception as e:
+                print(f"[graph] Error in cycle: {e}")
+                break
+
+        duration = round(time.time() - cycle_start, 1)
+        if total_processed > 0:
+            print(f"\n[cycle] ══ Cycle complete: {total_processed} anomalies processed in {duration}s ══")
+        else:
+            print(f"[cycle] No anomalies detected. Sleeping {POLL_INTERVAL}s...")
+
+        # Wait before next observation poll
         try:
             await asyncio.sleep(POLL_INTERVAL)
         except KeyboardInterrupt:
@@ -142,4 +175,3 @@ async def run():
 
 if __name__ == "__main__":
     asyncio.run(run())
-
