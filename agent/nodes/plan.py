@@ -93,11 +93,26 @@ def _get_deployment_prefix(affected_resource: str) -> str:
 
 
 def _parse_memory_need_from_diagnosis(diagnosis: str) -> int:
-    """Extract memory requirement from diagnosis text (e.g. '--vm-bytes 200M' → 250)."""
-    match = re.search(r'--vm-bytes\s+(\d+)[Mm]', diagnosis)
-    if match:
-        needed = int(match.group(1))
-        return int(needed * 1.25)  # 25% headroom
+    """Extract memory requirement from diagnosis text. Returns memory in Mi with 25% headroom."""
+    # Try multiple patterns to find the memory need
+    patterns = [
+        r'--vm-bytes\s+(\d+)\s*[Mm]',              # --vm-bytes 200M
+        r'allocat\w*\s+(\d+)\s*[Mm]',               # allocating 200M
+        r'(\d+)\s*[Mm]\s+of\s+(?:virtual\s+)?memory', # 200M of memory
+        r'(\d+)\s*[Mm](?:i?[Bb])?\s+memory',         # 200MB memory / 200Mi memory
+        r'exceeds?\s+.*?(\d+)\s*[Mm]i',              # exceeds the 32Mi limit (gets the limit)
+    ]
+    
+    largest = 0
+    for pattern in patterns:
+        matches = re.findall(pattern, diagnosis, re.IGNORECASE)
+        for m in matches:
+            val = int(m)
+            if val > largest:
+                largest = val
+    
+    if largest > 0:
+        return int(largest * 1.25)  # 25% headroom
     return 0
 
 
