@@ -69,9 +69,9 @@ builder.add_conditional_edges(
 builder.add_edge("execute", "explain")
 builder.add_edge("explain", END)
 
-# ── Compile with checkpointer (required for HITL interrupt/resume) ───
+# ── Compile with checkpointer ────────────────────────────────────────
 checkpointer = MemorySaver()
-graph = builder.compile(checkpointer=checkpointer, interrupt_before=["hitl"])
+graph = builder.compile(checkpointer=checkpointer)
 
 
 def get_config(thread_id: str) -> dict:
