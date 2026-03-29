@@ -80,8 +80,8 @@ def _post_slack_approval(state: ClusterState) -> str:
         ]}
     ]
 
-    if not token or not channel:
-        print("[hitl] No SLACK_BOT_TOKEN or SLACK_CHANNEL_ID — skipping Slack post")
+    if not token or not channel or token == "xoxb-..." or channel == "C...":
+        print("[hitl] Slack not configured — skipping approval post")
         return ""
 
     client = WebClient(token=token)

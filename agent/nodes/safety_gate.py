@@ -36,13 +36,22 @@ def safety_gate(state: ClusterState) -> str:
         print(f"[safety_gate] NodeNotReady → HITL ONLY")
         return "hitl"
 
-    # Auto-execute conditions
+    # Auto-execute conditions — LOW blast radius
     if (
         confidence >= 0.8
         and blast_radius == BlastRadius.LOW
         and action not in DESTRUCTIVE_ACTIONS
     ):
         print(f"[safety_gate] confidence={confidence:.2f}, blast_radius=low → AUTO EXECUTE")
+        return "auto_execute"
+
+    # Auto-execute conditions — MEDIUM blast radius (higher confidence required)
+    if (
+        confidence >= 0.9
+        and blast_radius == BlastRadius.MEDIUM
+        and action not in DESTRUCTIVE_ACTIONS
+    ):
+        print(f"[safety_gate] confidence={confidence:.2f}, blast_radius=medium → AUTO EXECUTE (high confidence)")
         return "auto_execute"
 
     # Everything else → HITL

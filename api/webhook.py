@@ -80,14 +80,15 @@ async def slack_actions(request: Request):
 async def _resume_graph(thread_id: str, decision: str):
     """
     Resumes the suspended LangGraph graph with the human's decision.
-    Imports graph here to avoid circular imports.
+    Uses Command(resume=...) to properly resume from interrupt().
     """
     from agent.graph import graph, get_config
+    from langgraph.types import Command
 
     config = get_config(thread_id)
     try:
         await graph.ainvoke(
-            {"hitl_decision": decision},
+            Command(resume={"decision": decision}),
             config=config
         )
         print(f"[webhook] Graph resumed for thread {thread_id[:12]}, decision={decision}")
