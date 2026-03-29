@@ -38,7 +38,15 @@ async def diagnose_node(state: ClusterState) -> ClusterState:
     if not state["anomalies"]:
         return {**state, "diagnosis": "", "current_anomaly": None}
 
-    anomaly: Anomaly = state["anomalies"][0]
+    # Sort by severity: CRITICAL > HIGH > MEDIUM > LOW → process highest first
+    severity_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+    sorted_anomalies = sorted(
+        state["anomalies"],
+        key=lambda a: severity_rank.get(a.severity.value, 0),
+        reverse=True
+    )
+    anomaly: Anomaly = sorted_anomalies[0]
+    print(f"[diagnose] Processing highest severity anomaly: {anomaly.type.value} ({anomaly.severity.value}) on {anomaly.affected_resource}")
     pod_name = anomaly.affected_resource.split("/")[-1]
     namespace = anomaly.namespace
 

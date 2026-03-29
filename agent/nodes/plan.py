@@ -1,9 +1,12 @@
 """
 Plan Node — proposes a RemediationPlan based on diagnosis and anomaly type.
 DESTRUCTIVE_ACTIONS is hardcoded here — never LLM-controlled.
+Includes escalation logic: restart → patch_memory → HITL.
 """
 import json
 import os
+import re
+from pathlib import Path
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 from agent.state import ClusterState
@@ -25,14 +28,14 @@ DESTRUCTIVE_ACTIONS = frozenset([
 
 # Blast radius rules — deterministic, not LLM-determined
 BLAST_RADIUS_MAP = {
-    AnomalyType.CRASH_LOOP_BACK_OFF: BlastRadius.LOW,    # restart pod only
-    AnomalyType.OOM_KILLED: BlastRadius.MEDIUM,           # patch deployment memory
-    AnomalyType.EVICTED_POD: BlastRadius.LOW,             # delete evicted pod
-    AnomalyType.IMAGE_PULL_BACK_OFF: BlastRadius.LOW,     # alert only, no change
-    AnomalyType.PENDING_POD: BlastRadius.MEDIUM,          # recommend only
-    AnomalyType.CPU_THROTTLING: BlastRadius.MEDIUM,       # patch CPU limit
-    AnomalyType.DEPLOYMENT_STALLED: BlastRadius.HIGH,     # rollback or force rollout
-    AnomalyType.NODE_NOT_READY: BlastRadius.HIGH,         # HITL only, never auto
+    AnomalyType.CRASH_LOOP_BACK_OFF: BlastRadius.LOW,
+    AnomalyType.OOM_KILLED: BlastRadius.MEDIUM,
+    AnomalyType.EVICTED_POD: BlastRadius.LOW,
+    AnomalyType.IMAGE_PULL_BACK_OFF: BlastRadius.LOW,
+    AnomalyType.PENDING_POD: BlastRadius.MEDIUM,
+    AnomalyType.CPU_THROTTLING: BlastRadius.MEDIUM,
+    AnomalyType.DEPLOYMENT_STALLED: BlastRadius.HIGH,
+    AnomalyType.NODE_NOT_READY: BlastRadius.HIGH,
 }
 
 PLAN_PROMPT = """You are a Kubernetes remediation planner.
@@ -62,17 +65,71 @@ OUTPUT — return ONLY valid JSON, no markdown:
 }
 """
 
+AUDIT_LOG_PATH = Path("audit_log.json")
+
+
+def _count_previous_actions(pod_prefix: str) -> dict:
+    """Count how many times each action was tried on this pod/deployment."""
+    counts = {"restart_pod": 0, "patch_memory": 0, "total": 0}
+    if not AUDIT_LOG_PATH.exists():
+        return counts
+    try:
+        log = json.loads(AUDIT_LOG_PATH.read_text())
+        for entry in log:
+            # Match by deployment prefix (e.g. "default/oom-test" matches "default/oom-test-xxx-yyy")
+            if entry.get("affected_resource", "").startswith(pod_prefix):
+                action = entry.get("plan_action", "")
+                counts[action] = counts.get(action, 0) + 1
+                counts["total"] += 1
+    except Exception:
+        pass
+    return counts
+
+
+def _get_deployment_prefix(affected_resource: str) -> str:
+    """Extract deployment prefix from pod name. e.g. 'default/oom-test-7d9-xkc' → 'default/oom-test'"""
+    parts = affected_resource.rsplit("-", 2)
+    return parts[0] if len(parts) >= 3 else affected_resource
+
+
+def _parse_memory_need_from_diagnosis(diagnosis: str) -> int:
+    """Extract memory requirement from diagnosis text (e.g. '--vm-bytes 200M' → 250)."""
+    match = re.search(r'--vm-bytes\s+(\d+)[Mm]', diagnosis)
+    if match:
+        needed = int(match.group(1))
+        return int(needed * 1.25)  # 25% headroom
+    return 0
+
 
 async def plan_node(state: ClusterState) -> ClusterState:
     if not state["current_anomaly"]:
         return {**state, "plan": None}
 
     anomaly: Anomaly = state["current_anomaly"]
+    
+    # ── Escalation logic ────────────────────────────────────────────
+    pod_prefix = _get_deployment_prefix(anomaly.affected_resource)
+    prev_actions = _count_previous_actions(pod_prefix)
+    
+    if prev_actions["total"] >= 4:
+        print(f"[plan] ESCALATION: {prev_actions['total']} previous attempts on {pod_prefix} → routing to HITL")
+        plan = RemediationPlan(
+            action="recommend",
+            target_resource=anomaly.affected_resource,
+            namespace=anomaly.namespace,
+            params={},
+            confidence=0.5,
+            blast_radius=BlastRadius.HIGH,
+            reasoning=f"Automated fixes exhausted ({prev_actions['total']} attempts). Escalating to human."
+        )
+        return {**state, "plan": plan}
+
     llm = ChatGroq(model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"))
 
     context = f"""Anomaly: {anomaly.type.value}
 Affected resource: {anomaly.affected_resource}
 Namespace: {anomaly.namespace}
+Previous attempts on this resource: {json.dumps(prev_actions)}
 Diagnosis:
 {state["diagnosis"]}
 """
@@ -92,19 +149,35 @@ Diagnosis:
 
     plan_dict = json.loads(raw)
 
-    # Enforce blast_radius deterministically — never trust LLM for safety classification
+    # Enforce blast_radius deterministically
     blast_radius = BLAST_RADIUS_MAP.get(anomaly.type, BlastRadius.HIGH)
     plan_dict["blast_radius"] = blast_radius.value
 
-    # Reject destructive actions outright
+    # Reject destructive actions
     if plan_dict.get("action") in DESTRUCTIVE_ACTIONS:
         plan_dict["action"] = "recommend"
         plan_dict["confidence"] = 0.0
-        plan_dict["reasoning"] = f"Action was in DESTRUCTIVE_ACTIONS list — downgraded to recommend. Original: {plan_dict.get('action')}"
+        plan_dict["reasoning"] = f"Action was in DESTRUCTIVE_ACTIONS list — downgraded to recommend."
 
-    # Add OOMKilled memory params
+    # ── Smarter OOM fix ─────────────────────────────────────────────
     if anomaly.type == AnomalyType.OOM_KILLED and plan_dict["action"] == "patch_memory":
-        plan_dict["params"]["memory_factor"] = 1.5
+        smart_limit = _parse_memory_need_from_diagnosis(state.get("diagnosis", ""))
+        if smart_limit > 0:
+            plan_dict["params"]["memory_limit_mi"] = smart_limit
+            plan_dict["params"]["memory_factor"] = 1.0  # use absolute value instead
+            print(f"[plan] Smart OOM fix: setting memory to {smart_limit}Mi (parsed from diagnosis)")
+        else:
+            plan_dict["params"]["memory_factor"] = 1.5
+
+    # ── Escalation: if restart already tried, escalate to patch_memory
+    if (plan_dict["action"] == "restart_pod" and 
+        anomaly.type.value in ["CrashLoopBackOff", "OOMKilled"] and
+        prev_actions.get("restart_pod", 0) >= 1):
+        plan_dict["action"] = "patch_memory"
+        plan_dict["params"]["memory_factor"] = 2.0
+        plan_dict["reasoning"] += " [ESCALATED: restart already tried, upgrading to patch_memory]"
+        print(f"[plan] ESCALATION: restart already tried → patch_memory (2x)")
 
     plan = RemediationPlan(**plan_dict)
     return {**state, "plan": plan}
+

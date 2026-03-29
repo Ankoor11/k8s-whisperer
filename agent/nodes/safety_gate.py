@@ -38,7 +38,7 @@ def safety_gate(state: ClusterState) -> str:
 
     # Auto-execute conditions
     if (
-        confidence > 0.8
+        confidence >= 0.8
         and blast_radius == BlastRadius.LOW
         and action not in DESTRUCTIVE_ACTIONS
     ):

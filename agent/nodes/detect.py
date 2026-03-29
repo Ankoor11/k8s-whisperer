@@ -1,6 +1,7 @@
 """
-Detect Node — LLM classifier that reads ClusterState.events and emits typed Anomaly objects.
-Handles false-positive filtering for rolling update restarts.
+Detect Node — deterministic pre-filter + LLM classifier.
+Pre-filter catches obvious anomalies without an API call.
+LLM is only called when suspicious pods are found.
 """
 import json
 import os
@@ -10,26 +11,74 @@ from agent.state import ClusterState
 from agent.models import Anomaly, AnomalyType, Severity
 
 
+# ── Deterministic pre-filter ────────────────────────────────────────
+# These rules run in pure Python — ZERO API calls.
+# Only pods that match are sent to the LLM for classification.
+
+def _is_suspicious(event: dict) -> bool:
+    """Returns True if a pod shows any anomaly signal worth classifying."""
+    # Skip rolling updates
+    if event.get("is_rolling_update"):
+        return False
+
+    phase = event.get("phase", "")
+    restart_count = event.get("restart_count", 0)
+
+    # High restart count → likely CrashLoopBackOff
+    if restart_count >= 3:
+        return True
+
+    # Pending phase (stuck scheduling)
+    if phase == "Pending":
+        return True
+
+    # Evicted pods
+    if event.get("reason") == "Evicted":
+        return True
+
+    # Check container states for known bad signals
+    for cs in event.get("container_states", []):
+        state = cs.get("state", {})
+        last_state = cs.get("last_state", {})
+
+        # Waiting with bad reason
+        waiting = state.get("waiting", {})
+        if waiting:
+            reason = waiting.get("reason", "")
+            if reason in ("CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull",
+                          "CreateContainerConfigError", "RunContainerError"):
+                return True
+
+        # Terminated with OOMKilled
+        terminated = state.get("terminated", {})
+        if terminated.get("reason") == "OOMKilled":
+            return True
+        last_terminated = last_state.get("terminated", {})
+        if last_terminated.get("reason") == "OOMKilled":
+            return True
+
+    return False
+
+
+# ── LLM prompt (only used when suspicious pods exist) ───────────────
 SYSTEM_PROMPT = """You are a Kubernetes anomaly detection classifier.
 
-You receive a list of pod events from a cluster. Your job is to identify anomalies and output a JSON array.
+You receive a list of SUSPICIOUS pod events from a cluster. These pods have already been pre-filtered.
+Your job is to classify each anomaly precisely and output a JSON array.
 
-ANOMALY DETECTION RULES:
-- CrashLoopBackOff: restartCount > 3 (OR state is "waiting" with reason "CrashLoopBackOff")
-- OOMKilled: lastState.terminated.reason == "OOMKilled"
-- PendingPod: phase == "Pending" (only flag if it appears to be stuck, not a normal startup)
-- ImagePullBackOff: container state waiting reason is "ImagePullBackOff" or "ErrImagePull"
-- EvictedPod: pod.reason == "Evicted"
-- DeploymentStalled: report via separate deployment check
-- NodeNotReady: report via node status check
+ANOMALY TYPES:
+- CrashLoopBackOff: restartCount > 3 or waiting reason is CrashLoopBackOff
+- OOMKilled: terminated reason is OOMKilled
+- PendingPod: phase == Pending and appears stuck
+- ImagePullBackOff: waiting reason is ImagePullBackOff or ErrImagePull
+- EvictedPod: reason == Evicted
 
-FALSE POSITIVE RULES — DO NOT flag these as anomalies:
-- A pod restarting when is_rolling_update=true (it is intentional)
-- A pod in "Pending" phase for less than 60 seconds (normal scheduling delay)
-- "Completed" phase pods (Job pods that finished successfully)
-- Init containers in "Init:" states (normal init sequence)
+FALSE POSITIVES — DO NOT flag:
+- Rolling update restarts (is_rolling_update=true)
+- Pending for < 60 seconds (normal scheduling)
+- Completed phase pods (finished Jobs)
 
-OUTPUT FORMAT — return ONLY a valid JSON array, no markdown, no explanation:
+OUTPUT FORMAT — return ONLY a valid JSON array, no markdown:
 [
   {
     "type": "<AnomalyType>",
@@ -37,24 +86,26 @@ OUTPUT FORMAT — return ONLY a valid JSON array, no markdown, no explanation:
     "affected_resource": "<namespace/pod-name>",
     "namespace": "<namespace>",
     "confidence": <0.0-1.0>,
-    "trigger_signal": "<exact signal that triggered detection>",
-    "is_rolling_update": <true|false>
+    "trigger_signal": "<exact signal>",
+    "is_rolling_update": false
   }
 ]
 
-If no anomalies are detected, return an empty array: []
+If none qualify after analysis, return: []
 """
 
 
 async def detect_node(state: ClusterState) -> ClusterState:
     """
-    Runs LLM classifier over state.events.
-    Skips pods in state.active_incident_pods (race condition guard).
+    Two-stage detection:
+    1. Deterministic pre-filter (zero API calls) — finds suspicious pods
+    2. LLM classifier (1 API call) — only runs if pre-filter finds something
     """
     if not state["events"]:
+        print("[detect] No events to analyze.")
         return {**state, "anomalies": []}
 
-    # Filter out pods already being processed
+    # Filter out pods already being processed (cooldown)
     active = state.get("active_incident_pods", set())
     events_to_check = [
         e for e in state["events"]
@@ -62,20 +113,29 @@ async def detect_node(state: ClusterState) -> ClusterState:
     ]
 
     if not events_to_check:
+        print("[detect] All pods in cooldown — skipping.")
         return {**state, "anomalies": []}
 
+    # ── Stage 1: Deterministic pre-filter (FREE) ────────────────────
+    suspicious = [e for e in events_to_check if _is_suspicious(e)]
+
+    if not suspicious:
+        print(f"[detect] Pre-filter: {len(events_to_check)} pods checked, all healthy. (0 API calls)")
+        return {**state, "anomalies": []}
+
+    print(f"[detect] Pre-filter: {len(suspicious)}/{len(events_to_check)} pods suspicious → calling LLM...")
+
+    # ── Stage 2: LLM classification (1 API call) ────────────────────
     llm = ChatGroq(model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"))
 
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"Cluster events to analyse:\n{json.dumps(events_to_check, indent=2)}")
+        HumanMessage(content=f"Suspicious pods to classify:\n{json.dumps(suspicious, indent=2)}")
     ]
 
-    print(f"[detect] Analyzing {len(events_to_check)} pods...")
     response = await llm.ainvoke(messages)
     raw = response.content.strip()
-    print(f"[detect] LLM raw response: {raw}")
-
+    print(f"[detect] LLM response: {raw[:200]}...")
 
     # Strip markdown fences if present
     if raw.startswith("```"):

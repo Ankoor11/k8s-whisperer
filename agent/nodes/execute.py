@@ -27,6 +27,7 @@ async def execute_node(state: ClusterState) -> ClusterState:
     pod_name = plan.target_resource.split("/")[-1]
     namespace = plan.namespace
     result = ""
+    route = "auto_execute"  # Track route for explain_node audit
     success = False
 
     # ── Execute the action ──────────────────────────────────────
@@ -53,7 +54,7 @@ async def execute_node(state: ClusterState) -> ClusterState:
 
     elif plan.action in ("recommend", "alert_only"):
         result = f"No automated action taken. Recommendation: {plan.reasoning}"
-        return {**state, "result": result, "execution_success": True}
+        return {**state, "result": result, "execution_success": True, "route": "auto_execute"}
 
     elif plan.action == "patch_cpu":
         deployment_name = _pod_to_deployment(pod_name)
@@ -73,7 +74,7 @@ async def execute_node(state: ClusterState) -> ClusterState:
 
     else:
         result = f"Unknown action: {plan.action}"
-        return {**state, "result": result, "execution_success": False}
+        return {**state, "result": result, "execution_success": False, "route": "auto_execute"}
 
     # ── Verify with backoff ─────────────────────────────────────
     for wait_s in VERIFY_BACKOFF:
@@ -95,7 +96,7 @@ async def execute_node(state: ClusterState) -> ClusterState:
     if not success and "✓" not in result:
         result += "\n⚠ Pod not yet Running after 95s — may still be starting"
 
-    return {**state, "result": result, "execution_success": success}
+    return {**state, "result": result, "execution_success": success, "route": route}
 
 
 def _pod_to_deployment(pod_name: str) -> str:

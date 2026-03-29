@@ -110,9 +110,11 @@ def _append_audit_log(entry: LogEntry):
 
 def _post_slack_summary(explanation: str, entry: LogEntry):
     """Posts incident resolution summary to Slack."""
-    token = os.getenv("SLACK_BOT_TOKEN")
-    channel = os.getenv("SLACK_CHANNEL_ID")
-    if not token or not channel:
+    token = os.getenv("SLACK_BOT_TOKEN", "")
+    channel = os.getenv("SLACK_CHANNEL_ID", "")
+    # Skip if empty or still using placeholder values
+    if not token or not channel or token == "xoxb-..." or channel == "C...":
+        print(f"[explain] Slack not configured — skipping notification")
         return
 
     icon = "✅" if entry.decision in ("auto_executed", "hitl_approved") else "⚠️"
