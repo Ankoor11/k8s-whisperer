@@ -1,0 +1,77 @@
+# K8sWhisperer RBAC — pod-level operations only
+# Judges: no cluster-admin, no namespace delete, no node drain
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8swhisperer-sa
+  namespace: default
+  labels:
+    app: k8swhisperer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8swhisperer-role
+  namespace: default
+rules:
+  # Read pods and their logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch"]
+
+  # Delete pods (for restart remediation and eviction cleanup)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+
+  # Read events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+
+  # Read and patch Deployments (for memory/CPU limit patching)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+
+  # Trigger rollout restarts
+  - apiGroups: ["apps"]
+    resources: ["deployments/rollback"]
+    verbs: ["create"]
+
+  # Read nodes (read-only — never write)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Read ReplicaSets (for deployment stall detection)
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8swhisperer-binding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: k8swhisperer-role
+subjects:
+  - kind: ServiceAccount
+    name: k8swhisperer-sa
+    namespace: default
+
+# VERIFICATION COMMAND:
+# kubectl auth can-i delete namespace --as=system:serviceaccount:default:k8swhisperer-sa
+# Expected output: "no"
+#
+# kubectl auth can-i drain nodes --as=system:serviceaccount:default:k8swhisperer-sa
+# Expected output: "no"
+#
+# kubectl auth can-i delete pods --as=system:serviceaccount:default:k8swhisperer-sa -n default
+# Expected output: "yes"

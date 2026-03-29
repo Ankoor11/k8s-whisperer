@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crashloop-test
+  namespace: default
+  labels:
+    app: crashloop-test
+    scenario: k8swhisperer-test
+spec:
+  containers:
+    - name: crasher
+      image: busybox
+      command: ["/bin/sh", "-c", "echo 'Starting...'; sleep 2; echo 'ERROR: fatal error occurred'; exit 1"]
+      resources:
+        limits:
+          memory: "64Mi"
+          cpu: "100m"
+  restartPolicy: Always
