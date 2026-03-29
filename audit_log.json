@@ -63,5 +63,18 @@
     "result": "No automated action taken. Recommendation: The diagnosis indicates that the pod is unschedulable due to a node affinity/selector mismatch, specifically requiring a node with a gpu=true label that is not available. Since this is a PendingPod anomaly, the recommended action is to inform the engineer to review the node affinity/selector configuration and either add a node with the required label or modify the pod's configuration to match the available nodes.",
     "explanation": "A pod couldn't run due to a mismatch with available nodes. The system recommends adjusting the node or pod settings. The issue remains unresolved.",
     "duration_seconds": 0.0
+  },
+  {
+    "timestamp": "2026-03-29T14:35:26.494273",
+    "incident_id": "86c65fa3-c0bd-4fb3-848a-69df94b9ad69",
+    "anomaly_type": "CrashLoopBackOff",
+    "affected_resource": "default/oom-test-7d574d978b-2ppnd",
+    "diagnosis": "Root cause: The container is experiencing an Out-of-Memory (OOM) error due to insufficient memory allocation, causing the container to crash and restart repeatedly.\nEvidence: The kubectl describe output shows the container's last state as \"Terminated\" with a reason of \"OOMKilled\" and an exit code of 1, indicating that the container was killed due to an out-of-memory condition. The logs also show stress test errors, such as \"stress: FAIL: [1] (415) <-- worker 7 got signal 9\", which is consistent with an OOM error. Additionally, the container's memory limit is set to 32Mi, which may be too low for the stress test being run.\nImpact: The pod is currently not ready and is unable to provide service to end users due to the continuous crashing and restarting of the container, resulting in a loss of availability and potentially impacting downstream services that rely on this pod.",
+    "plan_action": "recommend",
+    "plan_blast_radius": "high",
+    "decision": "hitl_rejected",
+    "result": "",
+    "explanation": "The container ran out of memory and kept crashing. The agent recommends increasing the memory limit. The issue wasn't resolved.",
+    "duration_seconds": 0.0
   }
 ]

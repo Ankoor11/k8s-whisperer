@@ -117,14 +117,18 @@ def _post_slack_summary(explanation: str, entry: LogEntry):
         return
 
     icon = "✅" if entry.decision in ("auto_executed", "hitl_approved") else "⚠️"
+    result_short = str(entry.result)[:200] if entry.result else ""
     client = WebClient(token=token)
     try:
         client.chat_postMessage(
             channel=channel,
+            text=f"{icon} {entry.anomaly_type} on {entry.affected_resource} — {entry.decision}",
             blocks=[
                 {"type": "section", "text": {"type": "mrkdwn",
                     "text": f"{icon} *Incident Resolved* — `{entry.anomaly_type}` on `{entry.affected_resource}`"}},
                 {"type": "section", "text": {"type": "mrkdwn", "text": explanation}},
+                {"type": "section", "text": {"type": "mrkdwn",
+                    "text": f"*Result:*\n```{result_short}```"}},
                 {"type": "context", "elements": [
                     {"type": "mrkdwn",
                      "text": f"Action: `{entry.plan_action}` | Decision: `{entry.decision}` | ID: `{entry.incident_id[:8]}`"}
@@ -132,5 +136,6 @@ def _post_slack_summary(explanation: str, entry: LogEntry):
                 {"type": "divider"}
             ]
         )
+        print(f"[explain] Slack summary posted for {entry.anomaly_type}")
     except SlackApiError as e:
         print(f"[explain] Slack post failed: {e.response['error']}")

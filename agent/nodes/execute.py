@@ -4,6 +4,7 @@ Execute Node — runs the approved kubectl action and verifies resolution with b
 import asyncio
 import json
 import os
+import subprocess
 from agent.state import ClusterState
 from agent.models import RemediationPlan, AnomalyType
 from mcp.kubectl_client import (
@@ -27,7 +28,7 @@ async def execute_node(state: ClusterState) -> ClusterState:
     pod_name = plan.target_resource.split("/")[-1]
     namespace = plan.namespace
     result = ""
-    route = "auto_execute"  # Track route for explain_node audit
+    route = "auto_execute"
     success = False
 
     # ── Execute the action ──────────────────────────────────────
@@ -35,18 +36,25 @@ async def execute_node(state: ClusterState) -> ClusterState:
         result = delete_pod(pod_name=pod_name, namespace=namespace)
 
     elif plan.action == "patch_memory":
-        factor = plan.params.get("memory_factor", 1.5)
-        # Get current memory limit first
-        desc_out = describe_pod(pod_name=pod_name, namespace=namespace)
-        current_mi = _parse_memory_from_describe(desc_out)
-        new_mi = int(current_mi * factor)
         deployment_name = _pod_to_deployment(pod_name)
+
+        # Smart OOM fix: use absolute limit if available, else use factor
+        if plan.params.get("memory_limit_mi"):
+            new_mi = int(plan.params["memory_limit_mi"])
+            print(f"[execute] Smart patch: setting memory to {new_mi}Mi (absolute)")
+        else:
+            factor = plan.params.get("memory_factor", 1.5)
+            current_mi = _get_current_memory_mi(deployment_name, namespace)
+            new_mi = int(current_mi * factor)
+            print(f"[execute] Factor patch: {current_mi}Mi × {factor} = {new_mi}Mi")
+
         result = patch_pod_resources(
             deployment_name=deployment_name,
             namespace=namespace,
             memory_limit=f"{new_mi}Mi"
         )
-        # Restart pod to pick up new limits
+        print(f"[execute] Patch result: {result}")
+        # Delete old pod so new one picks up the new deployment spec
         delete_pod(pod_name=pod_name, namespace=namespace)
 
     elif plan.action == "delete_evicted_pod":
@@ -89,7 +97,6 @@ async def execute_node(state: ClusterState) -> ClusterState:
             elif phase in ("Failed", "Unknown"):
                 result += f"\n✗ Pod in {phase} state after action"
                 break
-            # else Pending/ContainerCreating — keep polling
         except Exception:
             pass
 
@@ -100,21 +107,27 @@ async def execute_node(state: ClusterState) -> ClusterState:
 
 
 def _pod_to_deployment(pod_name: str) -> str:
-    """Heuristic: strip pod hash suffix to get deployment name.
-    e.g. 'my-app-7d9f8b-xkc2p' → 'my-app'
-    """
+    """Heuristic: strip pod hash suffix to get deployment name."""
     parts = pod_name.rsplit("-", 2)
     return parts[0] if len(parts) >= 3 else pod_name
 
 
-def _parse_memory_from_describe(describe_output: str) -> int:
-    """Extract memory limit in Mi from kubectl describe output. Returns 256 as default."""
-    for line in describe_output.split("\n"):
-        if "memory:" in line.lower() and "Limits" in describe_output:
-            parts = line.strip().split()
-            for p in parts:
-                if p.endswith("Mi"):
-                    return int(p[:-2])
-                elif p.endswith("Gi"):
-                    return int(p[:-2]) * 1024
+def _get_current_memory_mi(deployment_name: str, namespace: str) -> int:
+    """Get current memory limit from deployment spec via kubectl JSON."""
+    try:
+        cmd = ["kubectl", "-n", namespace, "get", "deployment", deployment_name, "-o", "json"]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if out.returncode == 0:
+            deploy = json.loads(out.stdout)
+            containers = deploy["spec"]["template"]["spec"]["containers"]
+            limits = containers[0].get("resources", {}).get("limits", {})
+            mem = limits.get("memory", "256Mi")
+            if mem.endswith("Mi"):
+                return int(mem[:-2])
+            elif mem.endswith("Gi"):
+                return int(mem[:-2]) * 1024
+            elif mem.endswith("m"):
+                return max(int(int(mem[:-1]) / 1000000), 1)
+    except Exception as e:
+        print(f"[execute] Could not parse memory from deployment: {e}")
     return 256  # safe default
