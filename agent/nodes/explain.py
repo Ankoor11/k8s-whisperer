@@ -7,6 +7,7 @@ import os
 import uuid
 import time
 from pathlib import Path
+from typing import Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 from agent.llm_helper import get_llm, invoke_with_retry
 from slack_sdk import WebClient
@@ -88,8 +89,12 @@ Execution success: {state.get("execution_success", False)}
     # Append to audit_log.json
     _append_audit_log(entry)
 
-    # Submit to Stellar blockchain (immutable audit trail)
-    _submit_to_blockchain(entry)
+    # Submit to Stellar blockchain (immutable audit trail) — non-blocking
+    blockchain_result = _submit_to_blockchain(entry)
+    if blockchain_result:
+        entry.blockchain_tx_hash = blockchain_result.get("tx_hash")
+        # Re-write the last entry with the tx hash
+        _update_last_audit_entry(entry)
 
     # Post to Slack
     _post_slack_summary(explanation, entry)
@@ -101,8 +106,8 @@ Execution success: {state.get("execution_success", False)}
     return {**state, "explanation": explanation, "audit_log": audit_log}
 
 
-def _submit_to_blockchain(entry: LogEntry):
-    """Submits audit hash to Stellar blockchain for immutable logging."""
+def _submit_to_blockchain(entry) -> Optional[dict]:
+    """Submits audit hash to Stellar blockchain. Returns tx info or None on failure."""
     try:
         from integration.stellar_client import submit_to_stellar, compute_audit_hash
         entry_dict = entry.model_dump()
@@ -112,8 +117,23 @@ def _submit_to_blockchain(entry: LogEntry):
             print(f"[explain] ✓ Blockchain: tx={result['tx_hash'][:16]}... hash={audit_hash[:16]}...")
         else:
             print(f"[explain] Blockchain submission skipped (not configured)")
+        return result
     except Exception as e:
-        print(f"[explain] Blockchain submission failed: {e}")
+        print(f"[explain] ⚠ Blockchain submission failed (non-fatal): {e}")
+        return None
+
+
+def _update_last_audit_entry(entry):
+    """Re-writes the last entry in audit_log.json with blockchain_tx_hash."""
+    try:
+        existing = json.loads(AUDIT_LOG_PATH.read_text()) if AUDIT_LOG_PATH.exists() else []
+        if existing:
+            existing[-1] = entry.model_dump()
+            AUDIT_LOG_PATH.write_text(json.dumps(existing, indent=2, default=str))
+    except Exception as e:
+        print(f"[explain] ⚠ Failed to update audit entry with tx hash: {e}")
+
+
 
 
 def _append_audit_log(entry: LogEntry):

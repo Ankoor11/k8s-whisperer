@@ -6,17 +6,8 @@ import time
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="K8sWhisperer HITL Webhook")
-
-# CORS for frontend dev server
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 AUDIT_LOG_PATH = Path("audit_log.json")
 
@@ -34,6 +25,8 @@ async def get_audit_log():
         return JSONResponse(content=[])
     except Exception:
         return JSONResponse(content=[])
+
+
 
 
 def register_pending(thread_id: str, info: dict):

@@ -66,3 +66,5 @@ class LogEntry(BaseModel):
     result: str
     explanation: str                # plain English, non-expert readable
     duration_seconds: float = 0.0
+    blockchain_tx_hash: Optional[str] = None  # Stellar tx hash if on-chain submission succeeded
+
