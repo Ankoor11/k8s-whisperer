@@ -150,7 +150,7 @@ async def detect_node(state: ClusterState) -> ClusterState:
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
-            raw = raw[4:]
+            raw = raw[4:].lstrip()  # strip "json" + any leading newline/whitespace
 
     try:
         anomaly_dicts = json.loads(raw)

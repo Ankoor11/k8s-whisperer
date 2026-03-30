@@ -66,9 +66,12 @@ def _normalise_cluster_state(pods_data: dict, events_data: dict) -> list:
                 "last_state": last_state,
             })
 
+        # Pods owned by a rolling Deployment have "pod-template-hash".
+        # Pods owned by a rolling StatefulSet/DaemonSet have "controller-revision-hash".
+        # "deployment.kubernetes.io/revision" appears on the Deployment object itself, NOT on pods.
         is_rolling_update = (
-            "deployment.kubernetes.io/revision" in annotations
-            and any("controller-revision-hash" in k for k in annotations)
+            "pod-template-hash" in annotations
+            or "controller-revision-hash" in annotations
         )
 
         events.append({

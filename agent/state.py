@@ -37,7 +37,7 @@ class ClusterState(TypedDict):
 
     # ── Persistent ───────────────────────────────────────────────────
     audit_log: list[LogEntry]       # grows across all cycles
-    active_incident_pods: set       # mutex: pods currently being processed
+    active_incident_pods: list      # mutex: pods currently being processed (serializable list)
     incident_id: str                # uuid for current incident
 
 
@@ -59,6 +59,6 @@ def initial_state() -> ClusterState:
         execution_success=False,
         explanation="",
         audit_log=[],
-        active_incident_pods=set(),
+        active_incident_pods=[],
         incident_id=str(uuid.uuid4()),
     )

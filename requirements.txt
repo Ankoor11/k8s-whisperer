@@ -12,3 +12,6 @@ pydantic>=2.0.0
 httpx>=0.27.0
 anyio>=4.0.0
 requests>=2.31.0
+stellar-sdk>=10.0.0
+# mcp>=1.0.0  ← requires Python >=3.10 (for mcp/kubectl_server.py, mcp/prometheus_server.py)
+#              Upgrade venv to Python 3.10+ and run: pip install mcp

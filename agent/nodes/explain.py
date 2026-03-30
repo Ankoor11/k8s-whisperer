@@ -12,7 +12,7 @@ from agent.llm_helper import get_llm, invoke_with_retry
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from agent.state import ClusterState
-from agent.models import LogEntry
+from agent.models import LogEntry, HITLDecision
 
 
 EXPLAIN_PROMPT = """You are writing a plain-English incident summary for a non-technical stakeholder.
@@ -57,15 +57,18 @@ Execution success: {state.get("execution_success", False)}
 
     explanation = await invoke_with_retry(llm, messages, label="explain")
 
-    # Determine decision label
-    route = state.get("route", "")
-    hitl = state.get("hitl_decision", "pending")
-    if route == "auto_execute":
-        decision = "auto_executed"
-    elif hitl == "approved":
+    # Determine decision label.
+    # Note: safety_gate is a conditional edge function — it does NOT set state["route"].
+    # We infer the decision from hitl_decision and whether execution happened.
+    hitl = state.get("hitl_decision", HITLDecision.PENDING)
+    result = state.get("result", "")
+
+    if hitl == HITLDecision.APPROVED or hitl == "approved":
         decision = "hitl_approved"
-    elif hitl == "rejected":
+    elif hitl == HITLDecision.REJECTED or hitl == "rejected":
         decision = "hitl_rejected"
+    elif result:  # execution produced a result → auto-executed
+        decision = "auto_executed"
     else:
         decision = "skipped"
 
@@ -85,6 +88,9 @@ Execution success: {state.get("execution_success", False)}
     # Append to audit_log.json
     _append_audit_log(entry)
 
+    # Submit to Stellar blockchain (immutable audit trail)
+    _submit_to_blockchain(entry)
+
     # Post to Slack
     _post_slack_summary(explanation, entry)
 
@@ -93,6 +99,21 @@ Execution success: {state.get("execution_success", False)}
     audit_log.append(entry)
 
     return {**state, "explanation": explanation, "audit_log": audit_log}
+
+
+def _submit_to_blockchain(entry: LogEntry):
+    """Submits audit hash to Stellar blockchain for immutable logging."""
+    try:
+        from integration.stellar_client import submit_to_stellar, compute_audit_hash
+        entry_dict = entry.model_dump()
+        audit_hash = compute_audit_hash(entry_dict)
+        result = submit_to_stellar(entry_dict)
+        if result:
+            print(f"[explain] ✓ Blockchain: tx={result['tx_hash'][:16]}... hash={audit_hash[:16]}...")
+        else:
+            print(f"[explain] Blockchain submission skipped (not configured)")
+    except Exception as e:
+        print(f"[explain] Blockchain submission failed: {e}")
 
 
 def _append_audit_log(entry: LogEntry):
@@ -111,9 +132,7 @@ def _post_slack_summary(explanation: str, entry: LogEntry):
     """Posts incident resolution summary to Slack."""
     token = os.getenv("SLACK_BOT_TOKEN", "")
     channel = os.getenv("SLACK_CHANNEL_ID", "")
-    # Skip if empty or still using placeholder values
-    if not token or not channel or token == "xoxb-..." or channel == "C...":
-        print(f"[explain] Slack not configured — skipping notification")
+    if not token or not channel:
         return
 
     icon = "✅" if entry.decision in ("auto_executed", "hitl_approved") else "⚠️"

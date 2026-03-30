@@ -109,7 +109,7 @@ async def run():
             thread_id = str(uuid.uuid4())
             state["incident_id"] = thread_id
             state["hitl_thread_id"] = thread_id
-            state["active_incident_pods"] = set(processed_pods.keys())
+            state["active_incident_pods"] = list(processed_pods.keys())
 
             config = get_config(thread_id)
             try:

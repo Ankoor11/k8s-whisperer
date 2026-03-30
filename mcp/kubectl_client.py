@@ -85,17 +85,23 @@ def delete_pod(pod_name: str, namespace: str = "default") -> str:
 
 def patch_pod_resources(deployment_name: str, namespace: str = "default",
                         memory_limit: str = "", cpu_limit: str = "") -> str:
-    """Patch memory/CPU limits on the pod's parent Deployment."""
-    patch = {"spec": {"template": {"spec": {"containers": [
-        {"name": deployment_name,
-         "resources": {"limits": {}}}
-    ]}}}}
+    """Patch memory/CPU limits on the pod's parent Deployment.
+    Uses a JSON-patch style to avoid needing to know the container name.
+    Patches the first container's resource limits.
+    """
+    # Build JSON patch operations targeting the first container
+    ops = []
     if memory_limit:
-        patch["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"] = memory_limit
+        ops.append({"op": "add", "path": "/spec/template/spec/containers/0/resources/limits/memory", "value": memory_limit})
     if cpu_limit:
-        patch["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["cpu"] = cpu_limit
-    patch_str = json.dumps(patch)
-    return run_kubectl(["patch", "deployment", deployment_name, "--patch", patch_str], namespace)
+        ops.append({"op": "add", "path": "/spec/template/spec/containers/0/resources/limits/cpu", "value": cpu_limit})
+    if not ops:
+        return "ERROR: no limits specified"
+    patch_str = json.dumps(ops)
+    return run_kubectl(
+        ["patch", "deployment", deployment_name, "--type=json", f"--patch={patch_str}"],
+        namespace
+    )
 
 
 def rollout_restart(deployment_name: str, namespace: str = "default") -> str:

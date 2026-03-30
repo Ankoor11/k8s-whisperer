@@ -58,7 +58,7 @@ async def diagnose_node(state: ClusterState) -> ClusterState:
     if anomaly.type.value in ["CrashLoopBackOff", "OOMKilled"]:
         prev_logs = get_pod_logs(pod_name=pod_name, namespace=namespace,
                                  tail_lines=50, previous=True)
-        if prev_logs and "ERROR" not in prev_logs[:5]:
+        if prev_logs and not prev_logs.startswith("ERROR"):  # skip if kubectl returned an error
             raw_logs = f"=== Previous container logs ===\n{prev_logs}\n\n=== Current logs ===\n{raw_logs}"
 
     # Fetch describe

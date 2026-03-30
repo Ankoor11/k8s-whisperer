@@ -1,20 +1,39 @@
-"""
-FastAPI webhook server — HITL approval via local web UI + Slack.
-Works WITHOUT ngrok: open http://localhost:8002/pending in your browser.
-Start with: uvicorn api.webhook:app --port 8002 --reload
-"""
 import hashlib
 import hmac
 import json
 import os
 import time
+from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="K8sWhisperer HITL Webhook")
 
+# CORS for frontend dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+AUDIT_LOG_PATH = Path("audit_log.json")
+
 # In-memory store mapping thread_id → pending incident info
 _pending_approvals: dict[str, dict] = {}
+
+
+@app.get("/api/audit-log")
+async def get_audit_log():
+    """Serves the audit log JSON for the frontend dashboard."""
+    try:
+        if AUDIT_LOG_PATH.exists():
+            data = json.loads(AUDIT_LOG_PATH.read_text())
+            return JSONResponse(content=data)
+        return JSONResponse(content=[])
+    except Exception:
+        return JSONResponse(content=[])
 
 
 def register_pending(thread_id: str, info: dict):
