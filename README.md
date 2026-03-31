@@ -87,15 +87,7 @@ for e in log:
 "
 ```
 
-## Scoring (100 pts)
 
-| Category | Points |
-|---|---|
-| Autonomous Remediation | 30 |
-| Safety Gate & HITL | 25 |
-| Diagnosis Quality | 20 |
-| LangGraph Architecture | 15 |
-| MCP Integration | 10 |
 
 ## Key Safety Constraints
 
