@@ -76,6 +76,12 @@ kubectl delete -f k8s/test-scenarios/
 
 Every incident is logged to `audit_log.json` with: timestamp, incident_id, anomaly_type, affected_resource, diagnosis, plan_action, blast_radius, decision, result, and plain-English explanation.
 
+### Blockchain-Backed Audit Trail (Web3 Bonus)
+
+We also integrated **Stellar blockchain** into the agent pipeline to create an **immutable, tamper-proof audit trail**. After each incident is resolved, a SHA-256 hash of the audit entry is submitted on-chain via a Soroban smart contract — ensuring that no incident record can be altered or deleted after the fact.
+
+🔗 **GitHub**: [k8s-whisperer-audit-trail](https://github.com/divyanz-code/k8s-whisperer-audit-trail)
+
 ```bash
 python -c "
 import json
@@ -96,3 +102,4 @@ for e in log:
 - **Blast radius**: Deterministic map by anomaly type (never LLM-determined)
 - **Node-level actions**: Always HITL — never auto-execute
 - **HITL**: LangGraph `interrupt()` — no spin-waiting or `time.sleep()`
+
