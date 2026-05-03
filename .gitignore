@@ -13,3 +13,4 @@ audit_log.json
 
 # OS
 .DS_Store
+venv
